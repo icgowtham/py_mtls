@@ -1,0 +1,6 @@
+# Config file for the web application.
+server_host: 0.0.0.0
+server_port: 9009
+server_cert: /root/server.pem
+server_key: /root/server.key
+ca_cert: /root/ca_cert.pem

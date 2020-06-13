@@ -1,8 +1,8 @@
-# Py mTSL
+# Py mTLS
 * Python based server and client application for exchanging data using mTLS (mutual TLS).
 
 ### Introduction
-* `py_mtls` is a Python based server and client application for exchanging data using mTLS (mutual TLS). It contains a webserver application and client and a TCP server and client.
+* `py_mtls` is a Python based server and client application for exchanging data using mTLS (mutual TLS). It contains a webserver application and client along with TCP (TLS) server and client.
 
 
 ### Sample usage:

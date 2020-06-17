@@ -19,7 +19,7 @@ LOGGER.setLevel(logging.DEBUG)
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """Dummy route."""
+    """Default route."""
     if request.method == 'POST':
         return 'POST response from mTLS server'
     return 'Hello from mTLS server!'

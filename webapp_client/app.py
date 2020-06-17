@@ -83,6 +83,6 @@ if __name__ == '__main__':
             'Host': ARGS['hostname_header']
         }
     res = client.do_post(uri=ARGS['endpoint'],
-                         data='dummy',
+                         data='Hello from client',
                          headers=headers)
     LOGGER.info(res.read())

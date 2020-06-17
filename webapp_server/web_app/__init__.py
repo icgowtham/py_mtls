@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Requests handler."""
+"""Server handler."""
 
 import os
 import ssl
@@ -36,7 +36,7 @@ app = Flask(__name__)
 # To establish an SSL socket we need the private key and certificate.
 app_cert = config.get('server_cert', os.path.join(parent_path, 'server.pem'))
 app_key = config.get('server_key', os.path.join(parent_path, 'server.key'))
-app_key_password = None
+app_key_password = config.get('cert_pass', None)
 
 # In order to verify client certificates we need the certificate of the
 # CA that issued the client's certificate.

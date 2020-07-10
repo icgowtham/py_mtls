@@ -21,7 +21,7 @@ LOGGER.setLevel(logging.DEBUG)
 async def request_handler():
     """Default route."""
     if request.method == 'POST':
-    	LOGGER.debug(request.headers)
+        LOGGER.debug(request.headers)
         request_data = await request.data
         LOGGER.info('Received from client: ')
         LOGGER.info(request_data)

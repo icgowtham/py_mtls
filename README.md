@@ -2,7 +2,7 @@
 * Python based server and client application for using mTLS (mutual TLS).
 
 ### Introduction
-* `py_mtls` is a Python based server and client application using mTLS (mutual TLS). It contains a webserver application and client along with TCP (TLS) server and client.
+* `py_mtls` is a Python based server and client application using mTLS (mutual TLS). It contains a webserver application and client along with TCP (TLS) server and client. It also contains a simple web server which serves HTTP/2.0.
 
 
 ### Sample usage:
@@ -27,6 +27,17 @@ $ python3 server.py
 ```bash
 $ cd tls_tcp
 $ python3 client.py
+```
+#### Simple HTTP2 server
+* On one terminal first run the web application:
+```bash
+$ cd simple_http2_server
+$ python3 http2_server.py
+```
+* On another terminal run the `curl` command:
+```bash
+$ curl -v --http2 http://0.0.0.0:9009/
+$ curl -v --http2 -X POST http://0.0.0.0:9009/
 ```
 
 

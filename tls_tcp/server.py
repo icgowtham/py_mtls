@@ -14,6 +14,7 @@ __email__ = 'ic.gowtham@gmail.com'
 __version__ = '1.0'
 
 LOGGER = get_logger()
+MSG_LEN = 1094
 SUPPORTED_LOG_LEVELS = ('DEBUG', 'INFO', 'ERROR', 'FATAL', 'CRITICAL', 'WARNING')
 
 
@@ -73,11 +74,19 @@ class Server:
                 if not peer_cert or ('commonName', 'Dummy') not in peer_cert['subject'][5]:
                     LOGGER.error('Could not verify the client.')
 
-                data = self._secure_sock.read(1024)
-                LOGGER.info('Received "' + data.decode('utf-8') + '" from client.')
-                response = data.decode('utf-8') + ' World!'
-                self._secure_sock.write(response.encode('utf-8'))
-        except ssl.SSLEOFError:
+                chunks = []
+                bytes_read = 0
+                while True:
+                	chunk = self._secure_sock.recv(MSG_LEN)
+                	bytes_read += len(chunk)
+                	chunks.append(chunk)
+                	if not chunk or len(chunk) < MSG_LEN:
+                		break
+                client_data = b''.join(chunks)
+                LOGGER.info('Received "' + client_data.decode('utf-8') + '" from client.')
+                response = 'Hello from server!'
+                self._secure_sock.send(response.encode('utf-8'))
+        except ssl.SSLError:
             LOGGER.exception('SSL Error')
         except KeyboardInterrupt:
             self.close()

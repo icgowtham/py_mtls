@@ -18,6 +18,7 @@ MSG_LEN = 1094
 SUPPORTED_LOG_LEVELS = ('DEBUG', 'INFO', 'ERROR', 'FATAL', 'CRITICAL', 'WARNING')
 
 
+# pylint: disable=too-many-arguments,too-many-locals
 class Server:
     """Server class."""
 
@@ -56,6 +57,8 @@ class Server:
         try:
             while True:
                 client, from_addr = self._socket.accept()
+                LOGGER.debug(client)
+                LOGGER.debug(from_addr)
                 self._secure_sock = ssl.wrap_socket(client,
                                                     server_side=True,
                                                     ca_certs=self._ca_cert,
@@ -68,42 +71,48 @@ class Server:
                 LOGGER.debug('Cipher: %s', self._secure_sock.cipher())
                 peer_cert = self._secure_sock.getpeercert()
                 LOGGER.debug('Peer certificate: ')
-                print(pprint.pformat(peer_cert))
+                LOGGER.debug(pprint.pformat(peer_cert))
 
                 # Verify client
                 if not peer_cert or ('commonName', 'Dummy') not in peer_cert['subject'][5]:
                     LOGGER.error('Could not verify the client.')
 
                 chunks = []
-                bytes_read = 0
+                bytes_recd = 0
                 while True:
-                	chunk = self._secure_sock.recv(MSG_LEN)
-                	bytes_read += len(chunk)
-                	chunks.append(chunk)
-                	if not chunk or len(chunk) < MSG_LEN:
-                		break
-                client_data = b''.join(chunks)
-                LOGGER.info('Received "' + client_data.decode('utf-8') + '" from client.')
-                response = 'Hello from server!'
-                self._secure_sock.send(response.encode('utf-8'))
+                    chunk = self._secure_sock.recv(MSG_LEN)
+                    chunks.append(chunk)
+                    bytes_recd = bytes_recd + len(chunk)
+                    if not chunk or len(chunk) < MSG_LEN:
+                        break
+                LOGGER.info('Received "%s bytes".', str(bytes_recd))
+                request_data = b''.join(chunks)
+                LOGGER.debug(chunks)
+                response = b'Hello from SERVER -> OK'
+                self._secure_sock.send(response)
+                client.close()
         except ssl.SSLError:
-            LOGGER.exception('SSL Error')
+            LOGGER.exception('SSLError')
         except KeyboardInterrupt:
             self.close()
             sys.exit(0)
+        except Exception:  # pylint: disable=broad-except
+            LOGGER.exception('Unknown exception encountered!')
 
     def close(self):
         """Cleanup."""
         LOGGER.debug('Closing the connections.')
-        self._secure_sock.close()
-        self._socket.close()
+        if self._secure_sock:
+            self._secure_sock.close()
+        if self._socket:
+            self._socket.close()
 
 
 def parse_args():
     """Function to parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='''
-        {nm}: TCP over TLS mock server to accept requests.\n
+        {nm}: TCP over TLS server to accept requests.\n
         '''.format(nm=sys.argv[0]))
     parser.add_argument('-p',
                         '--port',
@@ -144,9 +153,9 @@ if __name__ == '__main__':
     else:
         LOGGER.warning('Unknown value for "log-level", should be one of: %s',
                        SUPPORTED_LOG_LEVELS)
-    svr = Server(host='0.0.0.0',
+    SVR = Server(host='0.0.0.0',
                  port=int(ARGS['port']),
                  cert=ARGS['cert'],
                  key=ARGS['key'],
                  ca_cert=ARGS['ca_cert'])
-    svr.serve_forever()
+    SVR.serve_forever()

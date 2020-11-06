@@ -7,6 +7,8 @@ import socket
 import ssl
 import sys
 
+from threading import Event, Thread
+
 from logger import get_logger
 
 __author__ = 'Ishwarachandra Gowtham'
@@ -14,11 +16,66 @@ __email__ = 'ic.gowtham@gmail.com'
 __version__ = '1.0'
 
 LOGGER = get_logger()
-MSG_LEN = 1094
+CLIENT_CONNS = []
+MSG_LEN = 2048
 SUPPORTED_LOG_LEVELS = ('DEBUG', 'INFO', 'ERROR', 'FATAL', 'CRITICAL', 'WARNING')
 
 
-# pylint: disable=too-many-arguments,too-many-locals
+# pylint: disable=broad-except,logging-not-lazy,unused-variable,no-member
+class ClientThread(Thread):
+    """Client class."""
+
+    def __init__(self, client, secure_sock, event):
+        """
+        Initialization method.
+
+        :param client: object
+            Client object to log.
+        :param secure_sock: object
+            Secure socket connection object for this client.
+        :param event: object
+            Event to trigger thread termination.
+        """
+        super().__init__()
+        self._client = client
+        self._secure_sock = secure_sock
+        self._event = event
+        LOGGER.info('[+] New socket thread started to handle %s [+]',
+                    str(self._client))
+        LOGGER.debug('Peer: ' + repr(self._secure_sock.getpeername()))
+        LOGGER.debug('Cipher: %s', self._secure_sock.cipher())
+        peer_cert = self._secure_sock.getpeercert()
+        LOGGER.debug('Peer certificate: ')
+        LOGGER.debug(pprint.pformat(peer_cert))
+
+    def run(self):
+        """Run method."""
+        while True:
+            try:
+                chunks = []
+                bytes_recd = 0
+                while True:
+                    chunk = self._secure_sock.recv(MSG_LEN)
+                    chunks.append(chunk)
+                    bytes_recd = bytes_recd + len(chunk)
+                    if not chunk or len(chunk) < MSG_LEN:
+                        break
+
+                LOGGER.info('Received "%s bytes".', str(bytes_recd))
+                request_data = b''.join(chunks)
+                LOGGER.debug(request_data)
+                response = b'Hello from SERVER -> OK'
+                self._secure_sock.send(response)
+                if self._event.wait(0):
+                    break
+            except ssl.SSLError:
+                LOGGER.exception('SSLError')
+            except (KeyboardInterrupt, OSError):
+                if hasattr(self, '__terminate'):
+                    res = self.__terminate
+
+
+# pylint: disable=too-many-arguments,too-many-locals,disable=broad-except
 class Server:
     """Server class."""
 
@@ -47,6 +104,10 @@ class Server:
         self._socket.bind((self._host, self._port))
         self._socket.listen(10)
         self._secure_sock = None
+        self._ssl_ctx = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
+        self._ssl_ctx.load_verify_locations(self._ca_cert)
+        self._ssl_ctx.load_cert_chain(self._cert, self._cert_key)
+        self._ssl_ctx.verify_mode = ssl.CERT_REQUIRED
 
     def serve_forever(self):
         """
@@ -54,54 +115,35 @@ class Server:
 
         :return: None
         """
+        event = Event()
         try:
             while True:
                 client, from_addr = self._socket.accept()
                 LOGGER.debug(client)
-                LOGGER.debug(from_addr)
-                self._secure_sock = ssl.wrap_socket(client,
-                                                    server_side=True,
-                                                    ca_certs=self._ca_cert,
-                                                    certfile=self._cert,
-                                                    keyfile=self._cert_key,
-                                                    cert_reqs=ssl.CERT_REQUIRED,
-                                                    ssl_version=ssl.PROTOCOL_TLSv1_2)
-
-                LOGGER.debug('Peer: ' + repr(self._secure_sock.getpeername()))
-                LOGGER.debug('Cipher: %s', self._secure_sock.cipher())
-                peer_cert = self._secure_sock.getpeercert()
-                LOGGER.debug('Peer certificate: ')
-                LOGGER.debug(pprint.pformat(peer_cert))
-
-                # Verify client
-                if not peer_cert or ('commonName', 'Dummy') not in peer_cert['subject'][5]:
-                    LOGGER.error('Could not verify the client.')
-
-                chunks = []
-                bytes_recd = 0
-                while True:
-                    chunk = self._secure_sock.recv(MSG_LEN)
-                    chunks.append(chunk)
-                    bytes_recd = bytes_recd + len(chunk)
-                    if not chunk or len(chunk) < MSG_LEN:
-                        break
-                LOGGER.info('Received "%s bytes".', str(bytes_recd))
-                request_data = b''.join(chunks)
-                LOGGER.debug(chunks)
-                response = b'Hello from SERVER -> OK'
-                self._secure_sock.send(response)
-                client.close()
+                self._secure_sock = self._ssl_ctx.wrap_socket(client,
+                                                              server_side=True)
+                new_client_conn = ClientThread(from_addr, self._secure_sock, event)
+                new_client_conn.start()
+                CLIENT_CONNS.append(new_client_conn)
         except ssl.SSLError:
             LOGGER.exception('SSLError')
         except KeyboardInterrupt:
+            event.set()
             self.close()
             sys.exit(0)
-        except Exception:  # pylint: disable=broad-except
+        except socket.error as sock_err:
+            LOGGER.warning(str(sock_err))
+            event.set()
+            self.close()
+            sys.exit(0)
+        except Exception:
             LOGGER.exception('Unknown exception encountered!')
 
     def close(self):
         """Cleanup."""
         LOGGER.debug('Closing the connections.')
+        for conn in CLIENT_CONNS:
+            conn.join()
         if self._secure_sock:
             self._secure_sock.close()
         if self._socket:
@@ -145,7 +187,7 @@ def parse_args():
     return vars(parser.parse_args())
 
 
-# Server
+# Entry point.
 if __name__ == '__main__':
     ARGS = parse_args()
     if ARGS['log_level'] in SUPPORTED_LOG_LEVELS:

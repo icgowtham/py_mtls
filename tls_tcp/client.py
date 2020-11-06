@@ -104,7 +104,7 @@ def send_message(host, port, cert, key, server_cert):
         # sock.close()
 
 
-# Client
+# Entry point.
 if __name__ == '__main__':
     ARGS = parse_args()
     if ARGS['log_level'] in SUPPORTED_LOG_LEVELS:

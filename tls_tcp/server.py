@@ -3,10 +3,10 @@
 
 import argparse
 import pprint
+import select
 import socket
 import ssl
 import sys
-
 from threading import Event, Thread
 
 from logger import get_logger
@@ -16,16 +16,27 @@ __email__ = 'ic.gowtham@gmail.com'
 __version__ = '1.0'
 
 LOGGER = get_logger()
-CLIENT_CONNS = []
 MSG_LEN = 2048
 SUPPORTED_LOG_LEVELS = ('DEBUG', 'INFO', 'ERROR', 'FATAL', 'CRITICAL', 'WARNING')
 
+# On some Linux kernel versions, EPOLLRDHUP is not defined.
+try:
+    select.EPOLLRDHUP
+except AttributeError:
+    select.EPOLLRDHUP = 0x2000
+
 
 # pylint: disable=broad-except,logging-not-lazy,unused-variable,no-member
-class ClientThread(Thread):
-    """Client class."""
+class ClientHandlerThread(Thread):
+    """
+    Client connection handler class.
 
-    def __init__(self, client, secure_sock, event):
+    A new thread instance is created for each client to process the request.
+    """
+
+    __slots__ = ('_client', '_epoll', '_secure_sock', '_sock_fd', '_stop_event')
+
+    def __init__(self, client, secure_sock):
         """
         Initialization method.
 
@@ -33,13 +44,14 @@ class ClientThread(Thread):
             Client object to log.
         :param secure_sock: object
             Secure socket connection object for this client.
-        :param event: object
-            Event to trigger thread termination.
         """
         super().__init__()
         self._client = client
         self._secure_sock = secure_sock
-        self._event = event
+        self._epoll = select.epoll()
+        self._sock_fd = self._secure_sock.fileno()
+        self._stop_event = Event()
+        self._epoll.register(self._sock_fd, select.EPOLLIN | select.EPOLLRDHUP)
         LOGGER.info('[+] New socket thread started to handle %s [+]',
                     str(self._client))
         LOGGER.debug('Peer: ' + repr(self._secure_sock.getpeername()))
@@ -47,37 +59,82 @@ class ClientThread(Thread):
         peer_cert = self._secure_sock.getpeercert()
         LOGGER.debug('Peer certificate: ')
         LOGGER.debug(pprint.pformat(peer_cert))
+        if isinstance(self._client, tuple):
+            self.name = self.name + ' - ' + str(self._client[0]) + ':' + str(self._client[1])
+
+    @property
+    def secure_sock(self):
+        """
+        Accessor for secure_sock object.
+
+        :return: object
+            SSL socket object.
+        """
+        return self._secure_sock
+
+    @property
+    def stop_event(self):
+        """
+        Accessor for stop_event object.
+
+        :return: object
+            Event object.
+        """
+        return self._stop_event
+
+    def terminate(self):
+        """
+        Terminate connections if the remote side is hung-up.
+
+        :return: None
+        """
+        LOGGER.debug('[%s]: Remote side hung-up. Terminating ...', self.name)
+        try:
+            self._secure_sock.shutdown(socket.SHUT_RDWR)
+            self._secure_sock.close()
+            self._epoll.unregister(self._sock_fd)
+            self._epoll.close()
+        except OSError as os_err:
+            LOGGER.error(str(os_err))
 
     def run(self):
         """Run method."""
-        while True:
-            try:
-                chunks = []
-                bytes_recd = 0
-                while True:
-                    chunk = self._secure_sock.recv(MSG_LEN)
-                    chunks.append(chunk)
-                    bytes_recd = bytes_recd + len(chunk)
-                    if not chunk or len(chunk) < MSG_LEN:
-                        break
-
-                LOGGER.info('Received "%s bytes".', str(bytes_recd))
-                request_data = b''.join(chunks)
-                LOGGER.debug(request_data)
-                response = b'Hello from SERVER -> OK'
-                self._secure_sock.send(response)
-                if self._event.wait(0):
-                    break
-            except ssl.SSLError:
-                LOGGER.exception('SSLError')
-            except (KeyboardInterrupt, OSError):
-                if hasattr(self, '__terminate'):
-                    res = self.__terminate
+        while not self.stop_event.isSet():
+            chunks = []
+            bytes_recd = 0
+            events = self._epoll.poll(1)
+            for file_no, event in events:
+                if (event & select.EPOLLRDHUP) or (event & select.EPOLLERR):
+                    self.terminate()
+                    self.stop_event.set()
+                elif event & select.EPOLLIN:
+                    try:
+                        chunk = self._secure_sock.recv(MSG_LEN)
+                        chunks.append(chunk)
+                        bytes_recd = bytes_recd + len(chunk)
+                        if not chunk or len(chunk) < MSG_LEN:
+                            break
+                        LOGGER.info('Received "%s bytes".', str(bytes_recd))
+                        request_data = b''.join(chunks)
+                        LOGGER.debug(request_data)
+                        response = b'Hello from SERVER -> OK'
+                        self._secure_sock.send(response)
+                        if self.stop_event.wait(0):
+                            break
+                    except ssl.SSLError:
+                        LOGGER.exception('SSLError')
+                    except (KeyboardInterrupt, OSError):
+                        if hasattr(self, '__terminate'):
+                            res = self.__terminate
 
 
 # pylint: disable=too-many-arguments,too-many-locals,disable=broad-except
 class Server:
     """Server class."""
+
+    CLIENT_CONNS = []
+    __slots__ = ('_cert', '_cert_key', '_ca_cert',
+                 '_socket', '_ssl_ctx')
 
     def __init__(self, host, port, cert, key, ca_cert):
         """
@@ -92,18 +149,15 @@ class Server:
         :param key: str
             Server certificate key file name with path.
         :param ca_cert: str
-            Client certificate file name with path.
+            CA certificate file name with path.
         """
         self._cert = cert
         self._cert_key = key
         self._ca_cert = ca_cert
-        self._host = host
-        self._port = port
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.bind((self._host, self._port))
+        self._socket.bind((host, port))
         self._socket.listen(10)
-        self._secure_sock = None
         self._ssl_ctx = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
         self._ssl_ctx.load_verify_locations(self._ca_cert)
         self._ssl_ctx.load_cert_chain(self._cert, self._cert_key)
@@ -115,38 +169,62 @@ class Server:
 
         :return: None
         """
-        event = Event()
         try:
             while True:
                 client, from_addr = self._socket.accept()
                 LOGGER.debug(client)
-                self._secure_sock = self._ssl_ctx.wrap_socket(client,
-                                                              server_side=True)
-                new_client_conn = ClientThread(from_addr, self._secure_sock, event)
+                secure_sock = self._ssl_ctx.wrap_socket(client, server_side=True)
+                new_client_conn = ClientHandlerThread(from_addr, secure_sock)
                 new_client_conn.start()
-                CLIENT_CONNS.append(new_client_conn)
+                Server.CLIENT_CONNS.append(new_client_conn)
         except ssl.SSLError:
             LOGGER.exception('SSLError')
         except KeyboardInterrupt:
-            event.set()
-            self.close()
+            self.cleanup()
             sys.exit(0)
         except socket.error as sock_err:
             LOGGER.warning(str(sock_err))
-            event.set()
-            self.close()
+            self.cleanup()
             sys.exit(0)
         except Exception:
             LOGGER.exception('Unknown exception encountered!')
 
-    def close(self):
-        """Cleanup."""
-        LOGGER.debug('Closing the connections.')
-        for conn in CLIENT_CONNS:
-            conn.join()
-        if self._secure_sock:
-            self._secure_sock.close()
+    @staticmethod
+    def terminate_connection(conn):
+        """
+        Static method to terminate connections gracefully.
+
+        :param conn: object
+            Connection object.
+        :return: None
+        """
+        if conn.secure_sock.fileno() > 0:
+            try:
+                if hasattr(conn.secure_sock, 'shutdown'):
+                    conn.secure_sock.shutdown(socket.SHUT_RDWR)
+                if hasattr(conn.secure_sock, 'close'):
+                    conn.secure_sock.close()
+            except ssl.SSLError as ssle:
+                LOGGER.debug('SSLError "%s" while trying to terminate.', str(ssle))
+            except OSError as ose:
+                LOGGER.debug('OSError "%s" while trying to terminate.', str(ose))
+
+    def cleanup(self):
+        """
+        Cleanup connection objects.
+
+        :return: None
+        """
+        LOGGER.debug('Cleaning up.')
+        for conn in Server.CLIENT_CONNS:
+            if conn:
+                if conn.secure_sock:
+                    Server.terminate_connection(conn)
+                conn.stop_event.set()
+                conn.join()
+                Server.CLIENT_CONNS.remove(conn)
         if self._socket:
+            self._socket.shutdown(socket.SHUT_RDWR)
             self._socket.close()
 
 

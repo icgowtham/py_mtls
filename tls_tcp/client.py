@@ -77,7 +77,7 @@ def send_message(host, port, cert, key, server_cert):
         sock.setblocking(True)
         sock.connect((host, port))
 
-        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(server_cert)
         context.load_cert_chain(certfile=cert, keyfile=key)
